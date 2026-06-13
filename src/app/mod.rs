@@ -8,6 +8,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use tui_textarea::TextArea;
 
 #[derive(PartialEq, Eq)]
 pub enum ActivePanel {
@@ -15,10 +16,18 @@ pub enum ActivePanel {
     Viewer,
 }
 
-pub struct App {
+pub struct App<'a> {
     pub vault_path: PathBuf,
     pub current_file: String,
-    pub current_file_content: String,
+
+    pub text_editor: TextArea<'a>,
+    pub modal_input: TextArea<'a>,
+    pub search_input: TextArea<'a>,
+
+    pub show_autocomplete: bool,
+    pub autocomplete_query: String,
+    pub autocomplete_index: usize,
+
     pub files: Vec<String>,
     pub file_paths: Vec<String>,
     pub selected_index: usize,
@@ -26,15 +35,16 @@ pub struct App {
 
     pub show_new_note_modal: bool,
     pub show_rename_modal: bool,
-    pub new_note_input: String,
-    pub cursor_position: usize, // Track cursor character index location
+    pub show_search_bar: bool,
+    pub show_sidebar_search: bool,
+    pub sidebar_search_query: String,
 
     pub active_panel: ActivePanel,
     pub is_editing: bool,
     pub(crate) db: DbEngine,
 }
 
-impl App {
+impl<'a> App<'a> {
     pub fn new(vault_path: PathBuf) -> Self {
         let mut db = DbEngine::init().expect("Failed to initialize database");
         db.index_vault(&vault_path)
@@ -53,15 +63,21 @@ impl App {
         let mut app = Self {
             vault_path,
             current_file: String::from("No file selected"),
-            current_file_content: String::from(""),
+            text_editor: TextArea::default(),
+            modal_input: TextArea::default(),
+            search_input: TextArea::default(),
+            show_autocomplete: false,
+            autocomplete_query: String::new(),
+            autocomplete_index: 0,
             files,
             file_paths,
             selected_index: 0,
             should_quit: false,
             show_new_note_modal: false,
             show_rename_modal: false,
-            new_note_input: String::new(),
-            cursor_position: 0,
+            show_search_bar: false,
+            show_sidebar_search: false,
+            sidebar_search_query: String::new(),
             active_panel: ActivePanel::Sidebar,
             is_editing: false,
             db,
@@ -123,23 +139,54 @@ impl App {
     }
 
     pub fn load_selected_file(&mut self) {
-        if !self.file_paths.is_empty() && self.selected_index < self.file_paths.len() {
-            let path = &self.file_paths[self.selected_index];
-            let title = &self.files[self.selected_index];
+        let filtered: Vec<(usize, &String)> = self
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| {
+                name.to_lowercase()
+                    .contains(&self.sidebar_search_query.to_lowercase())
+            })
+            .collect();
+
+        if !filtered.is_empty() && self.selected_index < filtered.len() {
+            let direct_index = filtered[self.selected_index].0;
+            let path = &self.file_paths[direct_index];
+            let title = &self.files[direct_index];
 
             self.current_file = title.clone();
             if let Ok(content) = fs::read_to_string(path) {
-                self.current_file_content = content;
+                let lines: Vec<String> = content.lines().map(String::from).collect();
+                let textarea = TextArea::new(lines);
+
+                self.text_editor = textarea;
+
+                if !self.search_input.lines()[0].is_empty() {
+                    let query = &self.search_input.lines()[0];
+                    let _ = self.text_editor.set_search_pattern(query);
+                }
             } else {
-                self.current_file_content = String::from("");
+                self.text_editor = TextArea::default();
             }
         }
     }
 
     pub fn save_current_file(&self) {
-        if !self.file_paths.is_empty() && self.selected_index < self.file_paths.len() {
-            let path = &self.file_paths[self.selected_index];
-            let _ = fs::write(path, &self.current_file_content);
+        let filtered: Vec<(usize, &String)> = self
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| {
+                name.to_lowercase()
+                    .contains(&self.sidebar_search_query.to_lowercase())
+            })
+            .collect();
+
+        if !filtered.is_empty() && self.selected_index < filtered.len() {
+            let direct_index = filtered[self.selected_index].0;
+            let path = &self.file_paths[direct_index];
+            let content = self.text_editor.lines().join("\n");
+            let _ = fs::write(path, content);
         }
     }
 }

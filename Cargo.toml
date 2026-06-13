@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ratatui = "0.29.0"
-crossterm = "0.28.1"
-rusqlite = { version = "0.32.0", features = ["bundled"] }
-clap = { version = "4.5.0", features = ["derive"] }
-pulldown-cmark = "0.12.0"
+ratatui = "0.29"
+crossterm = "0.28"
+clap = { version = "4.0", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+tui-textarea = { version = "0.7", features = ["crossterm", "search"] }
+regex = "1.10"
