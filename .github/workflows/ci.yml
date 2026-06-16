@@ -39,11 +39,31 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Upload artifact
+      - name: Upload binary artifact
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: target/${{ matrix.target }}/release/lrn${{ matrix.extension }}
+
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        run: choco install nsis --no-progress
+        shell: pwsh
+
+      - name: Create Windows installer (NSIS)
+        if: runner.os == 'Windows'
+        run: |
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /DNSIS_ARCH=x86_64 nsis/installer.nsi
+
+      - name: Upload Windows artifacts
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lrn-windows-x86_64
+          path: |
+            target/x86_64-pc-windows-msvc/release/lrn.exe
+            target\nsis-x86_64\release\lrn-installer.exe
 
   release:
     needs: build
