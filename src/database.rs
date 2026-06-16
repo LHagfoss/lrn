@@ -34,6 +34,10 @@ impl DbEngine {
     }
 
     pub fn index_vault(&mut self, vault_path: &Path) -> Result<()> {
+        // Clear all tables so deleted files are removed from the DB.
+        self.conn.execute("DELETE FROM links", [])?;
+        self.conn.execute("DELETE FROM files", [])?;
+
         let re = Regex::new(r"\[\[(.*?)\]\]").unwrap();
         let entries = fs::read_dir(vault_path)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;

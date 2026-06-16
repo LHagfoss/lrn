@@ -22,8 +22,6 @@ pub fn render(frame: &mut Frame, app: &App) {
     components::draw_viewer(frame, app, workspace_chunks[1]);
     components::draw_footer(frame, app, screen_chunks[1]);
     components::draw_modal(frame, app);
+    components::draw_delete_modal(frame, app);
 
-    if app.show_autocomplete {
-        components::draw_autocomplete_modal(frame, app, workspace_chunks[1]);
-    }
 }

@@ -7,6 +7,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::process;
 use std::time::{Duration, Instant};
 use tui_textarea::TextArea;
 
@@ -35,12 +36,13 @@ pub struct App<'a> {
 
     pub show_new_note_modal: bool,
     pub show_rename_modal: bool,
+    pub show_delete_modal: bool,
+    pub delete_selection: usize,
     pub show_search_bar: bool,
     pub show_sidebar_search: bool,
     pub sidebar_search_query: String,
 
     pub active_panel: ActivePanel,
-    pub is_editing: bool,
     pub(crate) db: DbEngine,
 }
 
@@ -75,11 +77,12 @@ impl<'a> App<'a> {
             should_quit: false,
             show_new_note_modal: false,
             show_rename_modal: false,
+            show_delete_modal: false,
+            delete_selection: 0,
             show_search_bar: false,
             show_sidebar_search: false,
             sidebar_search_query: String::new(),
             active_panel: ActivePanel::Sidebar,
-            is_editing: false,
             db,
         };
 
@@ -138,6 +141,52 @@ impl<'a> App<'a> {
         }
     }
 
+    pub fn save_current_file(&mut self) {
+        let filtered: Vec<(usize, &String)> = self
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| {
+                name.to_lowercase()
+                    .contains(&self.sidebar_search_query.to_lowercase())
+            })
+            .collect();
+
+        if !filtered.is_empty() && self.selected_index < filtered.len() {
+            let direct_index = filtered[self.selected_index].0;
+            let path = &self.file_paths[direct_index];
+            let content = self.text_editor.lines().join("\n");
+            let _ = fs::write(path, content);
+        }
+    }
+
+    /// Save changes, launch nvim on the current file, then reload its contents.
+    pub fn edit_with_nvim(&mut self) {
+        if self.file_paths.is_empty() || self.selected_index >= self.file_paths.len() {
+            return;
+        }
+        let vault_path = self.vault_path.clone();
+        let file_path = self.file_paths[self.selected_index].clone();
+
+        // Save any pending inline changes to disk first
+        self.save_current_file();
+
+        // Launch nvim (crossterm raw mode + alternate screen get restored automatically)
+        let _ = process::Command::new("nvim").arg(&file_path).status();
+
+        // Reload the edited file back into the textarea
+        if let Ok(content) = fs::read_to_string(&file_path) {
+            if let Some(name) = PathBuf::from(&file_path).file_name() {
+                self.current_file = name.to_string_lossy().to_string();
+            }
+            let lines: Vec<String> = content.lines().map(String::from).collect();
+            self.text_editor = TextArea::new(lines);
+        }
+
+        // Re-index so backlinks stay in sync
+        let _ = self.db.index_vault(&vault_path);
+    }
+
     pub fn load_selected_file(&mut self) {
         let filtered: Vec<(usize, &String)> = self
             .files
@@ -168,25 +217,6 @@ impl<'a> App<'a> {
             } else {
                 self.text_editor = TextArea::default();
             }
-        }
-    }
-
-    pub fn save_current_file(&self) {
-        let filtered: Vec<(usize, &String)> = self
-            .files
-            .iter()
-            .enumerate()
-            .filter(|(_, name)| {
-                name.to_lowercase()
-                    .contains(&self.sidebar_search_query.to_lowercase())
-            })
-            .collect();
-
-        if !filtered.is_empty() && self.selected_index < filtered.len() {
-            let direct_index = filtered[self.selected_index].0;
-            let path = &self.file_paths[direct_index];
-            let content = self.text_editor.lines().join("\n");
-            let _ = fs::write(path, content);
         }
     }
 }

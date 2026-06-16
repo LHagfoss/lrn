@@ -4,7 +4,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph},
 };
 
 pub fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
@@ -59,19 +59,13 @@ pub fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 pub fn draw_viewer(frame: &mut Frame, app: &App, area: Rect) {
-    let border_style = if app.is_editing {
-        Style::default().fg(Color::Yellow)
-    } else if app.active_panel == ActivePanel::Viewer {
+    let border_style = if app.active_panel == ActivePanel::Viewer {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
     };
 
-    let title = if app.is_editing {
-        format!(" Editing: {} ", app.current_file)
-    } else {
-        format!(" {} ", app.current_file)
-    };
+    let title = format!(" {} ", app.current_file);
 
     let block = Block::default()
         .title(title)
@@ -82,11 +76,8 @@ pub fn draw_viewer(frame: &mut Frame, app: &App, area: Rect) {
     let mut widget = app.text_editor.clone();
     widget.set_block(block);
 
-    if !app.is_editing {
-        widget.set_cursor_style(Style::default());
-    } else {
-        widget.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
-    }
+    // Always show cursor — viewer is always interactive for search/navigation
+    widget.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
 
     frame.render_widget(&widget, area);
 }
@@ -106,14 +97,21 @@ pub fn draw_search_bar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 pub fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let help_text = if app.is_editing {
-        " Esc: Stop Editing & Save "
-    } else if app.show_sidebar_search {
-        " Type character sequences to drop sidebar mismatch entries | Enter/Esc: Exit Search "
+    let help_text = if app.show_sidebar_search {
+        String::from(" Type filenames to filter | Enter/Esc: Done | ↑↓: Navigate ")
     } else if app.show_search_bar {
-        " Type text string to jump highlight positions inside note content | Enter/Esc: Close "
+        String::from(" Search text in document | Enter/Esc: Close ")
+    } else if app.show_delete_modal {
+        let sel = match app.delete_selection {
+            0 => "[ Cancel ]",
+            1 => " [ Delete ] ",
+            _ => "",
+        };
+        format!(" Confirm deletion {} ", sel)
+    } else if app.active_panel == ActivePanel::Sidebar {
+        String::from(" ↑↓: Navigate | e/i: Edit in nvim | Tab: Viewer | r: Rename | n: New Note | d: Delete | /: Filter | f: Search ")
     } else {
-        " q: Quit | Tab: Switch Pane | ↑↓: Navigate | r: Rename | e: Edit | n: New Note | /: Filter Files | f: Search Text | c: Clear Filters "
+        String::from(" ↑↓: Navigate | Tab: Sidebar | Ctrl+O: Follow Link | f: Search | c: Clear ")
     };
     frame.render_widget(Paragraph::new(help_text), area);
 }
@@ -143,54 +141,34 @@ pub fn draw_modal(frame: &mut Frame, app: &App) {
     }
 }
 
-pub fn draw_autocomplete_modal(frame: &mut Frame, app: &App, editor_area: Rect) {
-    if !app.show_autocomplete {
+pub fn draw_delete_modal(frame: &mut Frame, app: &App) {
+    if !app.show_delete_modal {
         return;
     }
 
-    let filtered_files: Vec<&String> = app
-        .files
-        .iter()
-        .filter(|f| {
-            f.to_lowercase()
-                .contains(&app.autocomplete_query.to_lowercase())
-        })
-        .collect();
+    // Small centered modal
+    let area = centered_rect(42, 3, frame.area());
+    frame.render_widget(Clear, area);
 
-    let modal_area = centered_rect(40, 25, editor_area);
-    frame.render_widget(Clear, modal_area);
-
+    let sel = app.delete_selection;
     let block = Block::default()
-        .title(format!(
-            " Link Note (Filtering: '{}') ",
-            app.autocomplete_query
-        ))
+        .title(" Delete file ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Magenta));
+        .border_style(Style::default().fg(Color::Red));
 
-    let items: Vec<ListItem> = filtered_files
-        .iter()
-        .map(|name| {
-            let clean_name = name.strip_suffix(".md").unwrap_or(name);
-            ListItem::new(format!("   {}", clean_name))
-        })
-        .collect();
+    // Styled buttons on one line: [ Cancel ]  |  [ Delete ]
+    let left = if sel == 0 { format!(" [ {} ] ", "Cancel") } else { format!("   {}   ", "Cancel") };
+    let right = if sel == 1 { format!(" [ {} ] ", "Delete") } else { format!("   {}   ", "Delete") };
 
-    let mut list_state = ListState::default();
-    if !filtered_files.is_empty() {
-        list_state.select(Some(app.autocomplete_index));
-    }
+    // Create styled line
+    use ratatui::text::{Line, Span};
+    let line = Line::from(vec![
+        Span::styled(left, Style::default().fg(if sel == 0 { Color::Cyan } else { Color::Gray })),
+        Span::raw(" | "),
+        Span::styled(right, Style::default().fg(if sel == 1 { Color::Red } else { Color::Gray })),
+    ]);
 
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(
-            Style::default()
-                .bg(Color::Magenta)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
-
-    frame.render_stateful_widget(list, modal_area, &mut list_state);
+    let msg = Paragraph::new(line).block(block);
+    frame.render_widget(msg, area);
 }

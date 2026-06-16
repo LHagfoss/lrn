@@ -1,243 +1,145 @@
 use crate::app::{ActivePanel, App};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::style::{Color, Style};
 use std::fs;
-use tui_textarea::{Input, Key, TextArea};
+use std::path::Path;
+use tui_textarea::TextArea;
 
 pub fn handle_key_input(app: &mut App, key: KeyEvent) {
-    let input_event = match key.code {
-        KeyCode::Char(c) => {
-            let mut mods = KeyModifiers::empty();
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                mods.insert(KeyModifiers::CONTROL);
-            }
-            if key.modifiers.contains(KeyModifiers::ALT) {
-                mods.insert(KeyModifiers::ALT);
-            }
-            Input {
-                key: Key::Char(c),
-                ctrl: mods.contains(KeyModifiers::CONTROL),
-                alt: mods.contains(KeyModifiers::ALT),
-                shift: key.modifiers.contains(KeyModifiers::SHIFT),
-            }
-        }
-        KeyCode::Backspace => Input {
-            key: Key::Backspace,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        },
-        KeyCode::Enter => Input {
-            key: Key::Enter,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        },
-        KeyCode::Left => Input {
-            key: Key::Left,
-            ctrl: false,
-            alt: key.modifiers.contains(KeyModifiers::ALT)
-                || key.modifiers.contains(KeyModifiers::CONTROL),
-            shift: false,
-        },
-        KeyCode::Right => Input {
-            key: Key::Right,
-            ctrl: false,
-            alt: key.modifiers.contains(KeyModifiers::ALT)
-                || key.modifiers.contains(KeyModifiers::CONTROL),
-            shift: false,
-        },
-        KeyCode::Up => Input {
-            key: Key::Up,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        },
-        KeyCode::Down => Input {
-            key: Key::Down,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        },
-        KeyCode::Delete => Input {
-            key: Key::Delete,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        },
-        _ => Input::default(),
-    };
-
-    // --- CRITICAL FIX: HIGHEST PRIORITY INTERCEPT FOR AUTOCOMPLETE ---
-    if app.is_editing && app.show_autocomplete {
-        let filtered_files: Vec<&String> = app
-            .files
-            .iter()
-            .filter(|f| {
-                f.to_lowercase()
-                    .contains(&app.autocomplete_query.to_lowercase())
-            })
-            .collect();
-
+    // --- Search bar (document-level text search) ---
+    if app.show_search_bar {
         match key.code {
             KeyCode::Esc => {
-                app.show_autocomplete = false;
-                app.autocomplete_query.clear();
-                app.autocomplete_index = 0;
-
-                // Wipe out the incomplete link characters entirely
-                app.text_editor.delete_char();
-                app.text_editor.delete_char();
-            }
-            KeyCode::Up => {
-                if app.autocomplete_index > 0 {
-                    app.autocomplete_index -= 1;
-                }
-            }
-            KeyCode::Down => {
-                if !filtered_files.is_empty() && app.autocomplete_index < filtered_files.len() - 1 {
-                    app.autocomplete_index += 1;
-                }
+                app.show_search_bar = false;
+                app.search_input = TextArea::default();
             }
             KeyCode::Enter => {
-                if !filtered_files.is_empty() && app.autocomplete_index < filtered_files.len() {
-                    let chosen_file = filtered_files[app.autocomplete_index];
-                    let link_name = chosen_file.strip_suffix(".md").unwrap_or(chosen_file);
-
-                    // Drop the name cleanly inside the pre-rendered [[]] container
-                    app.text_editor.insert_str(link_name);
-
-                    // Safely jump the cursor past the closing "]]" brackets
-                    app.text_editor
-                        .move_cursor(tui_textarea::CursorMove::Forward);
-                    app.text_editor
-                        .move_cursor(tui_textarea::CursorMove::Forward);
-                }
-                app.show_autocomplete = false;
-                app.autocomplete_query.clear();
-                app.autocomplete_index = 0;
-            }
-            KeyCode::Backspace => {
-                if app.autocomplete_query.is_empty() {
-                    app.show_autocomplete = false;
-                    app.text_editor.delete_char();
-                } else {
-                    app.autocomplete_query.pop();
-                    app.autocomplete_index = 0;
-                    app.text_editor.delete_char();
+                let query = app.search_input.lines()[0].clone();
+                app.show_search_bar = false;
+                if !query.is_empty() {
+                    let _ = app.text_editor.set_search_pattern(&query);
                 }
             }
-            KeyCode::Char(c) => {
-                if c == ']' {
-                    app.show_autocomplete = false;
-                    app.autocomplete_query.clear();
-                    app.autocomplete_index = 0;
-                    app.text_editor
-                        .move_cursor(tui_textarea::CursorMove::Forward);
-                    app.text_editor
-                        .move_cursor(tui_textarea::CursorMove::Forward);
-                } else {
-                    app.autocomplete_query.push(c);
-                    app.autocomplete_index = 0;
-                    app.text_editor.insert_char(c);
+            _ => {
+                let input_event = convert_key_to_textarea_input(key);
+                if input_event.key != tui_textarea::Key::Null {
+                    app.search_input.input(input_event);
                 }
             }
-            _ => {}
         }
         return;
     }
 
+    // --- Sidebar filter mode ---
     if app.show_sidebar_search {
         match key.code {
-            KeyCode::Esc => {
+            KeyCode::Esc | KeyCode::Enter => {
                 app.show_sidebar_search = false;
-                app.sidebar_search_query.clear();
-                app.selected_index = 0;
-                app.load_selected_file();
-            }
-            KeyCode::Enter => {
-                app.show_sidebar_search = false;
-            }
-            KeyCode::Backspace => {
-                app.sidebar_search_query.pop();
-                app.selected_index = 0;
-                app.load_selected_file();
             }
             KeyCode::Char(c) => {
                 app.sidebar_search_query.push(c);
-                app.selected_index = 0;
-                app.load_selected_file();
+            }
+            KeyCode::Backspace => {
+                app.sidebar_search_query.pop();
             }
             _ => {}
         }
         return;
     }
 
-    if app.show_search_bar {
+    // --- Delete confirmation modal ---
+    if app.show_delete_modal {
         match key.code {
-            KeyCode::Esc | KeyCode::Enter => {
-                app.show_search_bar = false;
-                let _ = app.text_editor.set_search_pattern("");
+            KeyCode::Left | KeyCode::Char('c') => {
+                app.delete_selection = 0;
             }
-            _ => {
-                if input_event != Input::default() {
-                    app.search_input.input(input_event);
-                    let query = app.search_input.lines()[0].clone();
-
-                    if query.is_empty() {
-                        let _ = app.text_editor.set_search_pattern("");
-                    } else {
-                        let _ = app.text_editor.set_search_pattern(&query);
+            KeyCode::Right | KeyCode::Char('x') => {
+                app.delete_selection = 1;
+            }
+            KeyCode::Enter => {
+                if app.delete_selection == 1 {
+                    if !app.file_paths.is_empty() && app.selected_index < app.files.len() {
+                        let path = &app.file_paths[app.selected_index];
+                        let _ = fs::remove_file(path);
+                        app.reload_files_from_db();
+                        if !app.files.is_empty() {
+                            if app.selected_index >= app.files.len() {
+                                app.selected_index = app.files.len() - 1;
+                            }
+                            app.load_selected_file();
+                        } else {
+                            app.current_file = String::from("No file selected");
+                            app.text_editor = TextArea::default();
+                        }
                     }
                 }
+                app.show_delete_modal = false;
+                app.modal_input = TextArea::default();
+                app.delete_selection = 0;
             }
+            KeyCode::Esc => {
+                app.show_delete_modal = false;
+                app.modal_input = TextArea::default();
+                app.delete_selection = 0;
+            }
+            _ => {}
         }
         return;
     }
 
-    if app.show_new_note_modal || app.show_rename_modal {
+    // --- Rename / New note modals ---
+    if app.show_rename_modal || app.show_new_note_modal {
         match key.code {
-            KeyCode::Enter => {
-                let input_raw = app.modal_input.lines()[0].trim().to_string();
-                if !input_raw.is_empty() {
-                    let mut target_name = input_raw;
-                    if !target_name.ends_with(".md") {
-                        target_name.push_str(".md");
-                    }
+            KeyCode::Esc | KeyCode::Enter => {
+                let name = app.modal_input.lines()[0].clone();
+                app.modal_input = TextArea::default();
 
-                    if app.show_rename_modal && !app.file_paths.is_empty() {
-                        let old_path_str = &app.file_paths[app.selected_index];
-                        let old_path = std::path::Path::new(old_path_str);
-                        let new_path = app.vault_path.join(&target_name);
+                if !name.is_empty() {
+                    // Trim trailing .md if user added it explicitly
+                    let target_name = if name.ends_with(".md") {
+                        name.clone()
+                    } else {
+                        format!("{}.md", name)
+                    };
 
-                        if fs::rename(old_path, &new_path).is_ok() {
-                            app.reload_files_from_db();
-                            if let Some(pos) = app.files.iter().position(|f| f == &target_name) {
-                                app.selected_index = pos;
+                    if app.show_rename_modal {
+                        // Rename existing file
+                        if !app.files.is_empty() && app.selected_index < app.files.len() {
+                            let old_path = Path::new(&app.file_paths[app.selected_index]);
+                            let parent = old_path.parent().unwrap_or(&app.vault_path);
+                            let new_path = parent.join(&target_name);
+
+                            if let Err(e) = fs::rename(old_path, &new_path) {
+                                eprintln!("Rename failed: {}", e);
+                            } else {
+                                app.reload_files_from_db();
+                                // Re-select the renamed file
+                                app.sidebar_search_query.clear();
+                                if let Some(pos) = app.files.iter().position(|f| f == &target_name) {
+                                    app.selected_index = pos;
+                                    app.load_selected_file();
+                                }
                             }
-                            app.load_selected_file();
                         }
-                        app.show_rename_modal = false;
                     } else if app.show_new_note_modal {
-                        let file_path = app.vault_path.join(&target_name);
-                        let _ = fs::write(file_path, format!("# {}\n", target_name));
+                        // Create new file
+                        let new_path = app.vault_path.join(&target_name);
+                        let _ = fs::write(&new_path, "");
                         app.reload_files_from_db();
+                        // Select the new file
+                        app.sidebar_search_query.clear();
                         if let Some(pos) = app.files.iter().position(|f| f == &target_name) {
                             app.selected_index = pos;
+                            app.load_selected_file();
                         }
-                        app.load_selected_file();
-                        app.show_new_note_modal = false;
                     }
-                    app.modal_input = TextArea::default();
                 }
-            }
-            KeyCode::Esc => {
-                app.show_new_note_modal = false;
+
                 app.show_rename_modal = false;
-                app.modal_input = TextArea::default();
+                app.show_new_note_modal = false;
             }
             _ => {
-                if input_event != Input::default() {
+                let input_event = convert_key_to_textarea_input(key);
+                if input_event.key != tui_textarea::Key::Null {
                     app.modal_input.input(input_event);
                 }
             }
@@ -245,60 +147,7 @@ pub fn handle_key_input(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    if app.is_editing {
-        match key.code {
-            KeyCode::Esc => {
-                app.is_editing = false;
-                app.save_current_file();
-                app.reload_files_from_db();
-
-                if !app.search_input.lines()[0].is_empty() {
-                    let query = &app.search_input.lines()[0];
-                    let _ = app.text_editor.set_search_pattern(query);
-                }
-            }
-            KeyCode::Char('[') => {
-                let cursor = app.text_editor.cursor();
-                let lines = app.text_editor.lines();
-                let current_line = &lines[cursor.0];
-
-                if current_line.as_bytes().get(cursor.1) == Some(&b']') {
-                    app.text_editor.delete_char();
-
-                    app.text_editor.insert_str("]]");
-
-                    app.text_editor.move_cursor(tui_textarea::CursorMove::Back);
-                    app.text_editor.move_cursor(tui_textarea::CursorMove::Back);
-
-                    app.show_autocomplete = true;
-                    app.autocomplete_query.clear();
-                    app.autocomplete_index = 0;
-                } else {
-                    app.text_editor.insert_str("[]");
-                    app.text_editor.move_cursor(tui_textarea::CursorMove::Back);
-                }
-            }
-            KeyCode::Char('(') => {
-                app.text_editor.insert_str("()");
-                app.text_editor.move_cursor(tui_textarea::CursorMove::Back);
-            }
-            KeyCode::Char('{') => {
-                app.text_editor.insert_str("{}");
-                app.text_editor.move_cursor(tui_textarea::CursorMove::Back);
-            }
-            KeyCode::Char('"') => {
-                app.text_editor.insert_str("\"\"");
-                app.text_editor.move_cursor(tui_textarea::CursorMove::Back);
-            }
-            _ => {
-                if input_event != Input::default() {
-                    app.text_editor.input(input_event);
-                }
-            }
-        }
-        return;
-    }
-
+    // --- Main event loop ---
     match key.code {
         KeyCode::Char('q') => {
             app.should_quit = true;
@@ -335,35 +184,34 @@ pub fn handle_key_input(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Char('e') | KeyCode::Char('i') => {
+            // Launch external nvim for editing (full vim keybinds + text)
             if app.active_panel == ActivePanel::Viewer && !app.files.is_empty() {
-                app.is_editing = true;
+                app.edit_with_nvim();
             }
         }
         KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if app.active_panel == ActivePanel::Viewer {
-                let cursor = app.text_editor.cursor();
-                let lines = app.text_editor.lines();
-                if cursor.0 < lines.len() {
-                    let current_line = &lines[cursor.0];
-                    let col = cursor.1;
+            // Ctrl+O: follow wiki-link at cursor, navigate to target
+            let cursor = app.text_editor.cursor();
+            let lines = app.text_editor.lines();
+            if cursor.0 < lines.len() {
+                let current_line = &lines[cursor.0];
+                let col = cursor.1;
 
-                    if let Some(start_bracket) = current_line[..col].rfind("[[") {
-                        if let Some(end_bracket) = current_line[col..].find("]]") {
-                            let extracted_title = current_line
-                                [start_bracket + 2..col + end_bracket]
-                                .trim()
-                                .to_string();
-                            let mut lookup_filename = extracted_title;
-                            if !lookup_filename.ends_with(".md") {
-                                lookup_filename.push_str(".md");
-                            }
+                if let Some(start_bracket) = current_line[..col].rfind("[[") {
+                    if let Some(end_bracket) = current_line[col..].find("]]") {
+                        let extracted_title = current_line
+                            [start_bracket + 2..col + end_bracket]
+                            .trim()
+                            .to_string();
+                        let mut lookup_filename = extracted_title;
+                        if !lookup_filename.ends_with(".md") {
+                            lookup_filename.push_str(".md");
+                        }
 
-                            if let Some(pos) = app.files.iter().position(|f| f == &lookup_filename)
-                            {
-                                app.sidebar_search_query.clear();
-                                app.selected_index = pos;
-                                app.load_selected_file();
-                            }
+                        if let Some(pos) = app.files.iter().position(|f| f == &lookup_filename) {
+                            app.sidebar_search_query.clear();
+                            app.selected_index = pos;
+                            app.load_selected_file();
                         }
                     }
                 }
@@ -397,6 +245,74 @@ pub fn handle_key_input(app: &mut App, key: KeyEvent) {
                 app.load_selected_file();
             }
         }
+        KeyCode::Char('d') => {
+            if app.active_panel == ActivePanel::Sidebar && !app.files.is_empty() {
+                let current_name = app.files[app.selected_index].clone();
+                app.modal_input = TextArea::new(vec![format!("Delete '{}'?", current_name)]);
+                app.show_delete_modal = true;
+            }
+        }
+        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let _ = app.text_editor.undo();
+        }
+        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let _ = app.text_editor.redo();
+        }
         _ => {}
+    }
+}
+
+/// Convert a crossterm KeyEvent into a tui_textarea Input.
+fn convert_key_to_textarea_input(key: KeyEvent) -> tui_textarea::Input {
+    match key.code {
+        KeyCode::Char(c) => tui_textarea::Input {
+            key: tui_textarea::Key::Char(c),
+            ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+            alt: false,
+            shift: key.modifiers.contains(KeyModifiers::SHIFT),
+        },
+        KeyCode::Backspace => tui_textarea::Input {
+            key: tui_textarea::Key::Backspace,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        },
+        KeyCode::Enter => tui_textarea::Input {
+            key: tui_textarea::Key::Enter,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        },
+        KeyCode::Left => tui_textarea::Input {
+            key: tui_textarea::Key::Left,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        },
+        KeyCode::Right => tui_textarea::Input {
+            key: tui_textarea::Key::Right,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        },
+        KeyCode::Up => tui_textarea::Input {
+            key: tui_textarea::Key::Up,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        },
+        KeyCode::Down => tui_textarea::Input {
+            key: tui_textarea::Key::Down,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        },
+        KeyCode::Delete => tui_textarea::Input {
+            key: tui_textarea::Key::Delete,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        },
+        _ => tui_textarea::Input::default(),
     }
 }
