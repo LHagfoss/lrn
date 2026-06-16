@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -14,22 +17,14 @@ jobs:
             target: x86_64-unknown-linux-gnu
             name: lrn-linux-x86_64
             extension: ""
-            strip: true
           - os: macos-latest
             target: x86_64-apple-darwin
             name: lrn-macos-intel-x86_64
             extension: ""
-            strip: false
-          - os: macos-14
-            target: aarch64-apple-darwin
-            name: lrn-macos-arm64
-            extension: ""
-            strip: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             name: lrn-windows-x86_64
             extension: .exe
-            strip: false
 
     runs-on: ${{ matrix.os }}
 
@@ -44,15 +39,21 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Linux)
-        if: matrix.strip == true
-        run: strip target/${{ matrix.target }}/release/lrn${{ matrix.extension }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: target/${{ matrix.target }}/release/lrn${{ matrix.extension }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
 
       - name: Create GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "Release ${{ github.ref_name }}" \
-            --generate-notes \
-            target/${{ matrix.target }}/release/lrn${{ matrix.extension }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: lrn-*/*
+          generate_release_notes: true
